@@ -1,0 +1,59 @@
+---
+title: "microbiome power"
+author: "Daniel Spakowicz"
+date: "5/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(FDRsampsize)
+library(ggplot2)
+library(magrittr)
+library(tidyr)
+library(dplyr)
+library(pwr)
+```
+
+## Power to detect a change from the baseline sample
+
+```{r }
+# Sample size
+n.total <- 30
+
+# Compliance rate
+compliance <- 0.8
+
+
+# Define ranges of fold changes and coefficients of variation 
+# to calculate the power
+fold.change <- c(1.5, 2, 2.5, 3, 3.33)
+coef.variation <- c(0.3, 0.4, 0.5, 0.6, 1)
+
+power.l <- list()
+for (c in 1:length(coef.variation)) {
+  power.l[[as.character(coef.variation[c])]] <- 
+    power.hart(n = n.respond * compliance, 
+               alpha = typeIerror, 
+               log.fc = log(fold.change),
+               mu = rep(100, length(fold.change)), 
+               sig = rep(coef.variation[c], length(fold.change)))
+}
+
+# Reformat the list for plotting
+power.df <- bind_rows(power.l)
+power.df$fold.change <- fold.change
+
+# Plot as heatmap
+power.df %>%
+  gather(CV, Power, -fold.change) %>%
+  ggplot(aes(x = factor(fold.change), y = CV)) +
+  geom_tile(aes(fill = Power)) +
+  scale_fill_gradient(low = "white", high = "blue") +
+  geom_label(aes(factor(fold.change), CV, label = round(Power, 2))) +
+  labs(x = "Fold Change",
+       y = "Coefficient of Variation")
+```
+
+

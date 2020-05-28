@@ -1,0 +1,245 @@
+---
+title: "activity tracker calculation"
+author: "Daniel Spakowicz"
+date: "5/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(MASS)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(CausalImpact)
+```
+
+# ROAR-LCT 
+
+20-30 participants ≥ 60 years of age with advanced lung cancer who plan to receive treatment from the OSUCCC Thoracic Oncology Clinic will be enrolled.
+
+Activity tracker data will be used to monitor activity and resting heart rate. 
+
+Below is an example dataset that includes two covariates of varying periodicities and a "state change", i.e. an effect of an intervention.
+
+```{r example dataset}
+set.seed(123456)
+
+# length of the series
+len <- 500
+treatment <- ceiling(2*len/3) #beginning of the treatment
+postperiod <- len - treatment
+
+# parameters of the state
+statedim <- 3
+T <- diag(statedim) #parameter matrix of state
+Q <- 0.01*diag(statedim) #variance of state
+x1 <- sin(2*pi*seq_len(len)/90)
+x2 <- sin(2*pi*seq_len(len)/360)
+
+# simulation of the state
+z0 <- c(5,0,0) #initial conditions: mu_0 = 5, beta_10 = 0, beta_20 = 0
+z <- matrix(ncol = statedim, nrow = len)
+
+# Start with a draw based on the initial conditions z0
+z[1,] <- z0%*%T + mvrnorm(1,rep(0,statedim), Q)
+
+# Update using the conditions from the last draw (previous column)
+for (i in 2:len) {
+  z[i,] <- z[(i-1),] %*% T + mvrnorm(1, rep(0, statedim), Q)
+}
+
+# observations
+sigmasq <- 0.01 
+Z <- matrix(ncol = statedim, nrow = len) 
+Z[,1] <- rep(1, len)
+Z[,2] <- x1
+Z[,3] <- x2
+
+e <- 0.25 #effect size
+Ze <- Z
+Ze[treatment:len, 1] <- Ze[treatment:len, 1] * (1 + e)
+
+# Create a y vector without a state change
+y <- vector(length = len)
+for (i in 1:len) {
+  y[i] <- Z[i,] %*% z[i,] + sqrt(sigmasq)*rnorm(1)
+}
+
+# Create y vector with a state change (effect of intervention)
+ye <- vector(length = len)
+for (i in 1:len){
+  ye[i] <- Ze[i,] %*% z[i,] + sqrt(sigmasq)*rnorm(1)
+}
+
+# Create data frame containing all variables to be plotted
+z.plot <- 
+  Ze %>%
+  data.frame %>%
+  dplyr::rename(state = X1, x1 = X2, x2 = X3) %>%
+  mutate("y (no state change)" = y) %>%
+  mutate("y (with state change)" = ye) %>%
+  mutate(index = seq(1, nrow(.)))
+
+z.plot %>%
+  gather(key, value, -index) %>%
+  ggplot(aes(index, value)) +
+  geom_line(aes(group = key, color = key)) +
+  geom_vline(xintercept = treatment, lty = "dotted") +
+  theme_bw() +
+  labs(x = "Time", color = "") +
+  ggsave("../figures/example_state_change.png", height = 4, width = 7.5)
+```
+
+## Power calculation
+
+```{r}
+ci.pwr <- 
+  z.plot %>%
+  dplyr::select("y (with state change)", x1, x2, index) %>%
+  dplyr::rename("y" = "y (with state change)") %>%
+  zoo
+
+impact <- 
+  CausalImpact::CausalImpact(ci.pwr, 
+                           pre.period = c(1, treatment), 
+                           post.period = c(treatment + 1, 
+                                           treatment + postperiod)
+)
+
+plot(impact) +
+  ggsave("../figures/example_impact.png", height = 4, width = 7.5)
+```
+
+# What fraction of the time is this effect observed?
+
+```{r}
+# Wrap just the necessary bits into a function
+CreateCImodel <- function(state.size, effect.size){
+  
+  # Start with a new seed
+  seed <- runif(1, min = 0, max = 1e7))
+  set.seed(seed)
+  
+  # length of the series
+  len <- 500
+  treatment <- ceiling(2*len/3) #beginning of the treatment
+  postperiod <- len - treatment
+  
+  # parameters of the state
+  statedim <- 3
+  T <- diag(statedim) #parameter matrix of state
+  Q <- 0.01*diag(statedim) #variance of state
+  x1 <- sin(2 * pi * seq_len(len) / 90)
+  x2 <- sin(2 * pi * seq_len(len) / 360)
+  
+  # simulation of the state
+  z0 <- c(5,0,0) #initial conditions: mu_0 = 5, beta_10 = 0, beta_20 = 0
+  z <- matrix(ncol = statedim, nrow = len)
+  
+  # Start with a draw based on the initial conditions z0
+  z[1,] <- z0%*%T + mvrnorm(1,rep(0,statedim), Q)
+  
+  # Update using the conditions from the last draw (previous column)
+  for (i in 2:len) {
+    z[i,] <- z[(i-1),] %*% T + mvrnorm(1, rep(0, statedim), Q)
+  }
+  
+  # observations
+  sigmasq <- 0.01 
+  statesize <- state.size
+  Z <- matrix(ncol = statedim, nrow = len) 
+  Z[,1] <- rep(state.size, len)
+  Z[,2] <- x1
+  Z[,3] <- x2
+  
+  # Alter the state by the effect size
+  e <- effect.size
+  Ze <- Z
+  Ze[treatment:len, 1] <- Ze[treatment:len, 1] + (statesize * e)
+  
+  # Create y vector with a state change (effect of intervention)
+  ye <- vector(length = len)
+  for (i in 1:len){
+    ye[i] <- Ze[i,] %*% z[i,] + sqrt(sigmasq)*rnorm(1)
+  }
+  
+  # Create data frame containing all variables to be plotted
+  z.plot <- 
+    Ze %>%
+    data.frame %>%
+    dplyr::rename(state = X1, x1 = X2, x2 = X3) %>%
+    mutate("y" = ye) %>%
+    mutate(index = seq(1, nrow(.))) %>%
+    dplyr::select(y, x1, x2, index) %>%
+    zoo
+  
+  return(z.plot)
+}
+
+
+pval <- c()
+B <- 100
+state.size <- 1
+effect.size <- 0.25
+for (i in 1:B) {
+  impact <- CausalImpact(CreateCImodel(state.size, effect.size), 
+                         pre.period = c(1, treatment), 
+                         post.period = c(treatment + 1, 
+                                         treatment + postperiod)
+  )
+  pval[i] <- impact$summary$p[2]
+}
+
+pwr <- sum(pval < 0.05) / length(pval)
+
+pval %>%
+  data.frame(pval = .) %>%
+  ggplot(aes(pval)) +
+  geom_density() +
+  theme_bw() +
+  annotate(geom = "text", 
+           x = 0.3, 
+           y = 3,
+           label = paste0("Effect Size = ", effect.size, "\n",
+                          "Power = ", pwr)) +
+  ggsave(paste0("../figures/pvalue-density", effect.size, ".png"),
+         height = 4, width = 7.5)
+```
+
+
+
+```{r}
+n.iterations <- 100
+
+state.size <- 1
+effect.size <- 0.5
+for (i in 1:B) {
+  impact <- CausalImpact(CreateCImodel(state.size = state.size,
+                                       effect.size = effect.size), 
+                         pre.period = c(1, treatment), 
+                         post.period = c(treatment + 1, 
+                                         treatment + postperiod)
+  )
+  pval[i] <- impact$summary$p[2]
+}
+
+alpha <- 0.1
+pwr <- sum(pval < alpha) / length(pval)
+
+pval %>%
+  data.frame(pval = .) %>%
+  ggplot(aes(pval)) +
+  geom_density() +
+  theme_bw() +
+  annotate(geom = "text", 
+           x = max(pval) * 0.75, 
+           y = 7,
+           label = paste0("Effect Size = ", effect.size, "\n",
+                          "Power = ", pwr)) +
+  ggsave(paste0("../figures/pvalue-density", effect.size, ".png"),
+         height = 4, width = 7.5)
+```
+
