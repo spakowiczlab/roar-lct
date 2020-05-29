@@ -120,7 +120,7 @@ plot(impact) +
 CreateCImodel <- function(state.size, effect.size){
   
   # Start with a new seed
-  seed <- runif(1, min = 0, max = 1e7))
+  seed <- runif(1, min = 0, max = 1e7)
   set.seed(seed)
   
   # length of the series
